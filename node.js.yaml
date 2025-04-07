@@ -1,0 +1,87 @@
+---
+- name: Deploy Node.js Express App
+  hosts: n1
+  become: true
+  vars:
+    app_user: "nodeapp"
+    app_dir: "/opt/nodeapp"
+    app_repo: "https://github.com/yourusername/your-repo.git"
+    app_branch: "main"
+    node_version: "18.x"
+
+  tasks:
+    - name: Install Node.js prerequisites
+      dnf:
+        name:
+          - gcc-c++
+          - make
+          - git
+        state: present
+
+    - name: Add NodeSource repository
+      shell: |
+        curl -fsSL https://rpm.nodesource.com/setup_{{ node_version }} | bash -
+      args:
+        warn: false
+
+    - name: Install Node.js and npm
+      dnf:
+        name:
+          - nodejs
+        state: present
+
+    - name: Create application user
+      user:
+        name: "{{ app_user }}"
+        system: yes
+        create_home: no
+
+    - name: Create application directory
+      file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: 0755
+
+    - name: Clone application repository
+      git:
+        repo: "{{ app_repo }}"
+        dest: "{{ app_dir }}"
+        version: "{{ app_branch }}"
+        force: yes
+      become_user: "{{ app_user }}"
+
+    - name: Install dependencies
+      npm:
+        path: "{{ app_dir }}"
+        state: present
+      become_user: "{{ app_user }}"
+
+    - name: Configure systemd service
+      template:
+        src: nodeapp.service.j2
+        dest: /etc/systemd/system/nodeapp.service
+        owner: root
+        group: root
+        mode: 0644
+      notify:
+        - reload systemd
+        - restart nodeapp
+
+    - name: Enable and start service
+      service:
+        name: nodeapp
+        state: started
+        enabled: yes
+
+  handlers:
+    - name: reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: restart nodeapp
+      service:
+        name: nodeapp
+        state: restarted
+...
