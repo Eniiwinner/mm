@@ -1,6 +1,6 @@
 ---
 - name: Deploy MongoDB 8.0 and Node.js Express App
-  hosts: g1
+  hosts: n1
   become: true
   vars:
     mongodb_bind_ip: "127.0.0.1"
@@ -15,11 +15,14 @@
     mongodb_conn_str: "mongodb://localhost/devops"
 
   tasks:
-    - name: Install firewalld if missing
+    - name: Install required packages
       dnf:
-        name: firewalld
+        name:
+          - firewalld
+          - gcc-c++
+          - make
+          - git
         state: present
-      when: ansible_os_family == "RedHat"
 
     - name: Add MongoDB 8.0 GPG key
       rpm_key:
@@ -92,24 +95,15 @@
         state: started
         enabled: yes
 
-    - name: Install Node.js prerequisites
-      dnf:
-        name:
-          - gcc-c++
-          - make
-          - git
-        state: present
-
     - name: Add NodeSource repository
       shell: |
         curl -fsSL https://rpm.nodesource.com/setup_{{ node_version }} | bash -
       args:
         creates: "/etc/yum.repos.d/nodesource-el9.repo"
 
-    - name: Install Node.js and npm
+    - name: Install Node.js
       dnf:
-        name:
-          - nodejs
+        name: nodejs
         state: present
 
     - name: Create application user
@@ -157,7 +151,7 @@
         dest: "/etc/systemd/system/nodeapp.service"
         content: |
           [Unit]
-          Description=Node.js Express App with MongoDB
+          Description=Node.js Express App
           After=network.target mongod.service
 
           [Service]
@@ -184,17 +178,37 @@
         state: started
         enabled: yes
 
-    - name: Ensure firewalld is running
-      service:
-        name: firewalld
-        state: started
-        enabled: yes
+    - name: Configure firewall
+      block:
+        - name: Ensure firewalld is running
+          service:
+            name: firewalld
+            state: started
+            enabled: yes
 
-    - name: Open port 3000 using firewall-cmd
-      command: firewall-cmd --permanent --add-port=3000/tcp
-      register: firewall_result
-      changed_when: "'success' in firewall_result.stdout"
-      notify: reload firewalld
+        - name: Open port 3000
+          command: firewall-cmd --permanent --add-port=3000/tcp
+          register: firewall_result
+          changed_when: "'success' in firewall_result.stdout"
+
+        - name: Reload firewall
+          command: firewall-cmd --reload
+          when: firewall_result is changed
+
+    - name: Verify MongoDB version
+      command: mongod --version
+      register: mongo_version
+      changed_when: false
+
+    - name: Verify app is listening
+      wait_for:
+        host: "0.0.0.0"
+        port: 3000
+        timeout: 30
+      register: app_listening
+      until: app_listening is succeeded
+      retries: 5
+      delay: 10
 
   handlers:
     - name: restart mongod
@@ -210,7 +224,4 @@
       service:
         name: nodeapp
         state: restarted
-
-    - name: reload firewalld
-      command: firewall-cmd --reload
 ...
