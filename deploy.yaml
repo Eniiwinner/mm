@@ -1,51 +1,60 @@
 ---
-- name: Deploy MongoDB 8.0 and Node.js app
+- name: Install MongoDB (No Auth, No Admin User)
   hosts: n1
   become: true
   vars:
-    mongodb_version: "8.0"
-    mongodb_admin_password: "admin123!"
-    mongodb_app_db: "appdb"
-    mongodb_app_user: "appuser"
-    mongodb_app_password: "pass123!"
-    nodejs_version: "20.x"
-    app_name: "myapp"
-    app_user: "nodeuser"
-    app_directory: "/opt/{{ app_name }}"
-    app_repo: "https://github.com/Eniiwinner/mm.git"
-    app_port: 3000
+    mongodb_bind_ip: "127.0.0.1"  
+    mongodb_port: 27017
 
   tasks:
-    # Install prerequisites
-    - name: Install Python and pip
-      dnf:
-        name:
-          - python3
-          - python3-pip
+    - name: Add MongoDB GPG key
+      rpm_key:
         state: present
+        key: "https://www.mongodb.org/static/pgp/server-7.0.asc"
 
-    - name: Install PyMongo
-      pip:
-        name: pymongo
-        executable: pip3
-
-    # MongoDB Installation
-    - name: Add MongoDB 8.0 repo
+    - name: Configure MongoDB 7.0 repo
       yum_repository:
-        name: mongodb-org-{{ mongodb_version }}
-        description: MongoDB {{ mongodb_version }} Repository
-        baseurl: https://repo.mongodb.org/yum/redhat/9/mongodb-org/{{ mongodb_version }}/x86_64/
+        name: mongodb-org-7.0
+        description: MongoDB 7.0 Repository
+        baseurl: https://repo.mongodb.org/yum/redhat/9/mongodb-org/7.0/x86_64/
         gpgcheck: yes
-        gpgkey: https://www.mongodb.org/static/pgp/server-{{ mongodb_version }}.asc
+        gpgkey: https://www.mongodb.org/static/pgp/server-7.0.asc
         enabled: yes
 
-    - name: Install MongoDB
+    - name: Install MongoDB packages
       dnf:
         name:
           - mongodb-org
+          - mongodb-org-server
           - mongodb-mongosh
-          - mongodb-database-tools
         state: present
+
+    - name: Create MongoDB config
+      copy:
+        dest: /etc/mongod.conf
+        content: |
+          # MongoDB configuration with NO authentication
+          systemLog:
+            destination: file
+            path: /var/log/mongodb/mongod.log
+            logAppend: true
+
+          storage:
+            dbPath: /var/lib/mongo
+            journal:
+              enabled: true
+
+          net:
+            bindIp: {{ mongodb_bind_ip }}
+            port: {{ mongodb_port }}
+
+          # Explicitly disable authentication
+          security:
+            authorization: disabled
+        owner: root
+        group: root
+        mode: 0644
+      notify: restart mongod
 
     - name: Ensure MongoDB data directory exists
       file:
@@ -53,143 +62,17 @@
         state: directory
         owner: mongod
         group: mongod
-        mode: '0755'
+        mode: 0755
 
-    - name: Start MongoDB service
+    - name: Start and enable MongoDB
       service:
         name: mongod
         state: started
         enabled: yes
 
-    - name: Wait for MongoDB to accept connections
-      wait_for:
-        port: 27017
-        delay: 5
-        timeout: 60
-      register: mongo_ready
-      until: mongo_ready is succeeded
-      retries: 3
-      delay: 10
-
-    # Create initial admin user without auth
-    - name: Create admin user
-      community.mongodb.mongodb_user:
-        login_host: localhost
-        login_port: 27017
-        database: admin
-        user: admin
-        password: "{{ mongodb_admin_password }}"
-        roles: "userAdminAnyDatabase,readWriteAnyDatabase"
-        state: present
-
-    # Now enable auth and restart
-    - name: Enable MongoDB authentication
-      blockinfile:
-        path: /etc/mongod.conf
-        marker: "# {mark} ANSIBLE MANAGED BLOCK - MongoDB Auth"
-        block: |
-          security:
-            authorization: enabled
-
-    - name: Restart MongoDB with auth
+  handlers:
+    - name: restart mongod
       service:
         name: mongod
         state: restarted
-
-    - name: Wait for MongoDB to restart
-      wait_for:
-        port: 27017
-        delay: 5
-        timeout: 60
-
-    # Create application user with auth
-    - name: Create app database user
-      community.mongodb.mongodb_user:
-        login_host: localhost
-        login_port: 27017
-        login_user: admin
-        login_password: "{{ mongodb_admin_password }}"
-        login_database: admin
-        database: "{{ mongodb_app_db }}"
-        user: "{{ mongodb_app_user }}"
-        password: "{{ mongodb_app_password }}"
-        roles: "readWrite"
-        state: present
-
-    # Node.js Installation
-    - name: Install Node.js {{ nodejs_version }}
-      shell: |
-        curl -fsSL https://rpm.nodesource.com/setup_{{ nodejs_version }} | bash -
-        dnf install -y nodejs
-      args:
-        warn: false
-
-    # Application Deployment
-    - name: Create app user
-      user:
-        name: "{{ app_user }}"
-        system: yes
-        create_home: yes
-        shell: /bin/bash
-
-    - name: Create app directory
-      file:
-        path: "{{ app_directory }}"
-        state: directory
-        owner: "{{ app_user }}"
-        group: "{{ app_user }}"
-        mode: '0755'
-
-    - name: Clone app repo
-      git:
-        repo: "{{ app_repo }}"
-        dest: "{{ app_directory }}"
-        version: main
-      become_user: "{{ app_user }}"
-
-    - name: Enforce port in package.json
-      lineinfile:
-        path: "{{ app_directory }}/package.json"
-        regexp: '"start":'
-        line: '    "start": "node server.js --port {{ app_port }}",'
-        backrefs: yes
-      become_user: "{{ app_user }}"
-
-    - name: Install dependencies
-      npm:
-        path: "{{ app_directory }}"
-        state: present
-      become_user: "{{ app_user }}"
-
-    - name: Install PM2
-      npm:
-        name: pm2
-        global: yes
-
-    - name: Start application with PM2
-      shell: |
-        export PATH=$PATH:/usr/bin
-        pm2 start npm --name "{{ app_name }}" -- start
-        pm2 save
-        pm2 startup systemd -u "{{ app_user }}" --hp "/home/{{ app_user }}"
-      args:
-        chdir: "{{ app_directory }}"
-      become_user: "{{ app_user }}"
-
-    - name: Verify application is running
-      wait_for:
-        port: "{{ app_port }}"
-        timeout: 30
-      register: port_check
-      until: port_check is succeeded
-      retries: 3
-      delay: 10
-
-    - name: Show success message
-      debug:
-        msg: |
-          Application successfully deployed on port {{ app_port }}!
-          MongoDB Admin: admin/{{ mongodb_admin_password }}
-          App DB User: {{ mongodb_app_user }}/{{ mongodb_app_password }}
-          PM2 status: sudo -u {{ app_user }} pm2 list
 ...
