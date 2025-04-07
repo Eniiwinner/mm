@@ -1,0 +1,197 @@
+---
+- name: Deploy MongoDB and Node.js application on CentOS 9
+  hosts: n1
+  become: true
+  vars:
+    mongodb_admin_user: admin
+    mongodb_admin_password: "yourStrongAdminPassword"  # CHANGE THIS
+    mongodb_app_db: "yourAppDatabase"
+    mongodb_app_user: "appUser"
+    mongodb_app_password: "yourAppUserPassword"  # CHANGE THIS
+    nodejs_version: "20.x"
+    app_name: "your-app"
+    app_user: "nodeapp"
+    app_directory: "/opt/{{ app_name }}"
+    app_repo: "your-repository-url.git"  # CHANGE THIS
+    domain_name: "your-domain.com"  # CHANGE THIS
+
+  tasks:
+    # Install prerequisites
+    - name: Install basic dependencies
+      dnf:
+        name:
+          - git
+          - curl
+          - gnupg2
+          - firewalld
+          - Development Tools
+        state: present
+
+    # MongoDB Installation
+    - name: Add MongoDB repository
+      yum_repository:
+        name: mongodb-org-6.0
+        description: MongoDB Repository
+        baseurl: https://repo.mongodb.org/yum/redhat/9/mongodb-org/6.0/x86_64/
+        gpgcheck: yes
+        gpgkey: https://www.mongodb.org/static/pgp/server-6.0.asc
+        enabled: yes
+
+    - name: Install MongoDB
+      dnf:
+        name: mongodb-org
+        state: present
+
+    - name: Start and enable MongoDB service
+      service:
+        name: mongod
+        state: started
+        enabled: yes
+
+    # MongoDB Configuration
+    - name: Configure MongoDB authentication
+      lineinfile:
+        path: /etc/mongod.conf
+        insertafter: '^security:'
+        line: '  authorization: enabled'
+        regexp: '^  authorization:'
+
+    - name: Restart MongoDB after configuration
+      service:
+        name: mongod
+        state: restarted
+
+    - name: Create MongoDB admin user
+      community.mongodb.mongodb_user:
+        login_user: "{{ mongodb_admin_user }}"
+        login_password: "{{ mongodb_admin_password }}"
+        database: admin
+        user: "{{ mongodb_admin_user }}"
+        password: "{{ mongodb_admin_password }}"
+        roles: "userAdminAnyDatabase,readWriteAnyDatabase"
+        state: present
+      when: "'mongodb_admin_user' not in mongodb_users.users|map(attribute='user')"
+
+    - name: Create application database user
+      community.mongodb.mongodb_user:
+        login_user: "{{ mongodb_admin_user }}"
+        login_password: "{{ mongodb_admin_password }}"
+        login_database: admin
+        database: "{{ mongodb_app_db }}"
+        user: "{{ mongodb_app_user }}"
+        password: "{{ mongodb_app_password }}"
+        roles: "readWrite"
+        state: present
+
+    # Node.js Installation
+    - name: Add NodeSource repository
+      shell: |
+        curl -fsSL https://rpm.nodesource.com/setup_{{ nodejs_version }} | bash -
+      args:
+        warn: false
+      register: nodesource_setup
+      changed_when: "'NodeSource' not in nodesource_setup.stdout"
+
+    - name: Install Node.js and npm
+      dnf:
+        name: nodejs
+        state: present
+
+    # Application Setup
+    - name: Create application user
+      user:
+        name: "{{ app_user }}"
+        system: yes
+        create_home: yes
+        shell: /bin/bash
+
+    - name: Create application directory
+      file:
+        path: "{{ app_directory }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: '0755'
+
+    - name: Clone application repository
+      git:
+        repo: "{{ app_repo }}"
+        dest: "{{ app_directory }}"
+        version: main  # or your branch name
+        force: yes
+      become_user: "{{ app_user }}"
+
+    - name: Install PM2 globally
+      npm:
+        name: pm2
+        global: yes
+
+    - name: Install application dependencies
+      npm:
+        path: "{{ app_directory }}"
+        state: present
+      become_user: "{{ app_user }}"
+
+    - name: Create environment file
+      template:
+        src: templates/env.j2
+        dest: "{{ app_directory }}/.env"
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: '0640'
+
+    - name: Start application with PM2
+      shell: |
+        export PATH=$PATH:/usr/bin
+        pm2 start npm --name "{{ app_name }}" -- start
+        pm2 save
+        pm2 startup systemd -u "{{ app_user }}" --hp "/home/{{ app_user }}"
+      args:
+        chdir: "{{ app_directory }}"
+      become_user: "{{ app_user }}"
+      register: pm2_start
+      changed_when: "'online' not in pm2_start.stdout"
+
+    # Nginx Installation and Configuration
+    - name: Install Nginx
+      dnf:
+        name: nginx
+        state: present
+
+    - name: Configure Nginx
+      template:
+        src: templates/nginx.conf.j2
+        dest: /etc/nginx/conf.d/{{ app_name }}.conf
+      notify: Restart Nginx
+
+    - name: Start and enable Nginx
+      service:
+        name: nginx
+        state: started
+        enabled: yes
+
+    # Firewall Configuration
+    - name: Start and enable firewalld
+      service:
+        name: firewalld
+        state: started
+        enabled: yes
+
+    - name: Configure firewall
+      firewalld:
+        service: "{{ item }}"
+        permanent: yes
+        state: enabled
+      loop:
+        - http
+        - https
+      notify: Reload firewall
+
+  handlers:
+    - name: Restart Nginx
+      service:
+        name: nginx
+        state: restarted
+
+    - name: Reload firewall
+      command: firewall-cmd --reload
