@@ -1,5 +1,5 @@
 ---
-- name: Deploy MongoDB 8.0 and Node.js app (minimal)
+- name: Deploy MongoDB 8.0 and Node.js app
   hosts: n1
   become: true
   vars:
@@ -23,7 +23,7 @@
           - python3-pip
         state: present
 
-    - name: Install PyMongo (required for MongoDB modules)
+    - name: Install PyMongo
       pip:
         name: pymongo
         executable: pip3
@@ -45,21 +45,14 @@
           - mongodb-database-tools
         state: present
 
-    - name: Start MongoDB service
+    - name: Start MongoDB without auth
       service:
         name: mongod
         state: started
         enabled: yes
 
-    - name: Configure MongoDB authentication
-      blockinfile:
-        path: /etc/mongod.conf
-        marker: "# {mark} ANSIBLE MANAGED BLOCK - MongoDB Auth"
-        block: |
-          security:
-            authorization: enabled
 
-    - name: Create admin user
+    - name: Create admin user (no auth)
       community.mongodb.mongodb_user:
         login_host: localhost
         login_port: 27017
@@ -68,6 +61,27 @@
         password: "{{ mongodb_admin_password }}"
         roles: "userAdminAnyDatabase,readWriteAnyDatabase"
         state: present
+
+
+    - name: Enable MongoDB authentication
+      blockinfile:
+        path: /etc/mongod.conf
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - MongoDB Auth"
+        block: |
+          security:
+            authorization: enabled
+
+    - name: Restart MongoDB with auth
+      service:
+        name: mongod
+        state: restarted
+
+    - name: Verify MongoDB is ready
+      wait_for:
+        port: 27017
+        delay: 5
+        timeout: 60
+
 
     - name: Create app database user
       community.mongodb.mongodb_user:
@@ -153,6 +167,7 @@
       debug:
         msg: |
           Application successfully deployed on port {{ app_port }}!
-        MongoDB URI: mongodb://{{ mongodb_app_user }}:{{ mongodb_app_password }}@localhost:27017/{{ mongodb_app_db }}
-        PM2 status: pm2 list
+          MongoDB Admin: admin/{{ mongodb_admin_password }}
+          App DB User: {{ mongodb_app_user }}/{{ mongodb_app_password }}
+          PM2 status: sudo -u {{ app_user }} pm2 list
 ...
