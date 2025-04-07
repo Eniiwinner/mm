@@ -7,7 +7,6 @@
     mongodb_port: 27017
     mongodb_data_dir: "/var/lib/mongo"
     mongodb_log_dir: "/var/log/mongodb"
-    
     app_user: "nodeapp"
     app_dir: "/opt/nodeapp"
     app_repo: "https://github.com/Eniiwinner/mm.git"
@@ -148,14 +147,27 @@
         npm_config_prefix: "{{ app_dir }}/.npm"
 
     - name: Create systemd service
-      template:
-        src: nodeapp.service.j2
+      copy:
         dest: "/etc/systemd/system/nodeapp.service"
+        content: |
+          [Unit]
+          Description=Node.js Express App with MongoDB
+          After=network.target mongod.service
+
+          [Service]
+          User={{ app_user }}
+          WorkingDirectory={{ app_dir }}
+          Environment=MONGODB_URI={{ mongodb_conn_str }}
+          Environment=PORT=3000
+          ExecStart=/usr/bin/node {{ app_dir }}/index.js
+          Restart=always
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
         owner: root
         group: root
         mode: 0644
-      vars:
-        mongodb_conn_str: "{{ mongodb_conn_str }}"
       notify:
         - reload systemd
         - restart nodeapp
