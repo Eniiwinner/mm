@@ -5,7 +5,7 @@
   vars:
     app_user: "nodeapp"
     app_dir: "/opt/nodeapp"
-    app_repo: "https://github.com/yourusername/your-repo.git"
+    app_repo: "https://github.com/Eniiwinner/mm.git"
     app_branch: "main"
     node_version: "18.x"
 
@@ -22,7 +22,7 @@
       shell: |
         curl -fsSL https://rpm.nodesource.com/setup_{{ node_version }} | bash -
       args:
-        warn: false
+        creates: "/etc/yum.repos.d/nodesource-el9.repo"
 
     - name: Install Node.js and npm
       dnf:
@@ -61,7 +61,7 @@
     - name: Configure systemd service
       template:
         src: nodeapp.service.j2
-        dest: /etc/systemd/system/nodeapp.service
+        dest: "/etc/systemd/system/nodeapp.service"
         owner: root
         group: root
         mode: 0644
