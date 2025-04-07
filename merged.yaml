@@ -1,6 +1,6 @@
 ---
 - name: Deploy MongoDB 8.0 and Node.js Express App
-  hosts: g1
+  hosts: n1
   become: true
   vars:
     mongodb_bind_ip: "127.0.0.1"
