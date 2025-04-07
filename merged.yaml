@@ -15,6 +15,12 @@
     mongodb_conn_str: "mongodb://localhost/devops"
 
   tasks:
+    - name: Install firewalld if missing
+      dnf:
+        name: firewalld
+        state: present
+      when: ansible_os_family == "RedHat"
+
     - name: Add MongoDB 8.0 GPG key
       rpm_key:
         state: present
@@ -178,11 +184,16 @@
         state: started
         enabled: yes
 
-    - name: Open port 3000
-      firewalld:
-        port: 3000/tcp
-        permanent: yes
-        state: enabled
+    - name: Ensure firewalld is running
+      service:
+        name: firewalld
+        state: started
+        enabled: yes
+
+    - name: Open port 3000 using firewall-cmd
+      command: firewall-cmd --permanent --add-port=3000/tcp
+      register: firewall_result
+      changed_when: "'success' in firewall_result.stdout"
       notify: reload firewalld
 
   handlers:
@@ -201,7 +212,5 @@
         state: restarted
 
     - name: reload firewalld
-      service:
-        name: firewalld
-        state: reloaded
+      command: firewall-cmd --reload
 ...
