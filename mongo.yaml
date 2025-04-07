@@ -1,106 +1,252 @@
 ---
-- name: Install and Configure MongoDB 8.0
-  hosts: n1
+- name: Deploy MongoDB and Node.js Application
+  hosts: all
   become: true
   vars:
+ 
+    mongodb_version: "8.0"
     mongodb_bind_ip: "127.0.0.1"
     mongodb_port: 27017
     mongodb_data_dir: "/var/lib/mongo"
     mongodb_log_dir: "/var/log/mongodb"
+    mongodb_admin_user: "admin"
+    mongodb_admin_password: "admin123"
+    mongodb_app_db: "appdb"
+    mongodb_app_user: "appuser"
+    mongodb_app_password: "app123"
+
+ 
+    node_version: "18.x"
+    app_user: "nodeapp"
+    app_dir: "/opt/nodeapp"
+    app_repo: "https://github.com/yourusername/yourrepo.git"
+    app_branch: "main"
+    app_port: 3000
+    npm_global_dir: "{{ app_dir }}/.npm-global"
 
   tasks:
-    - name: Add MongoDB 8.0 GPG key
+
+    - name: Install system dependencies
+      dnf:
+        name:
+          - gcc-c++
+          - make
+          - git
+          - python3
+          - python3-pip
+        state: present
+
+    - name: Add MongoDB GPG key
       rpm_key:
         state: present
-        key: "https://www.mongodb.org/static/pgp/server-8.0.asc"
+        key: "https://www.mongodb.org/static/pgp/server-{{ mongodb_version }}.asc"
 
-    - name: Configure MongoDB 8.0 repository
+    - name: Configure MongoDB repository
       yum_repository:
-        name: mongodb-org-8.0
-        description: MongoDB 8.0 Repository
-        baseurl: https://repo.mongodb.org/yum/redhat/9/mongodb-org/8.0/x86_64/
+        name: mongodb-org-{{ mongodb_version }}
+        description: MongoDB {{ mongodb_version }} Repository
+        baseurl: "https://repo.mongodb.org/yum/redhat/9/mongodb-org/{{ mongodb_version }}/x86_64/"
         gpgcheck: yes
-        gpgkey: https://www.mongodb.org/static/pgp/server-8.0.asc
+        gpgkey: "https://www.mongodb.org/static/pgp/server-{{ mongodb_version }}.asc"
         enabled: yes
 
-    - name: Install MongoDB 8.0
+    - name: Install MongoDB packages
       dnf:
         name:
           - mongodb-org
           - mongodb-org-server
           - mongodb-org-mongos
+          - mongodb-org-tools
           - mongodb-mongosh
-          - mongodb-database-tools
         state: present
 
-    - name: Create MongoDB data directory
+    - name: Create MongoDB directories
       file:
-        path: "{{ mongodb_data_dir }}"
+        path: "{{ item }}"
         state: directory
         owner: mongod
         group: mongod
         mode: 0755
+      loop:
+        - "{{ mongodb_data_dir }}"
+        - "{{ mongodb_log_dir }}"
 
-    - name: Create MongoDB log directory
-      file:
-        path: "{{ mongodb_log_dir }}"
-        state: directory
-        owner: mongod
-        group: mongod
-        mode: 0755
-
-    - name: Create MongoDB configuration
-      copy:
+    - name: Configure MongoDB
+      template:
+        src: templates/mongod.conf.j2
         dest: /etc/mongod.conf
-        content: |
-          systemLog:
-            destination: file
-            path: {{ mongodb_log_dir }}/mongod.log
-            logAppend: true
-            logRotate: reopen
-
-          storage:
-            dbPath: {{ mongodb_data_dir }}
-            engine: wiredTiger
-            journal:
-              enabled: true
-
-          net:
-            bindIp: {{ mongodb_bind_ip }}
-            port: {{ mongodb_port }}
-            ipv6: false
-
-          processManagement:
-            fork: true
-            pidFilePath: /var/run/mongodb/mongod.pid
-            timeZoneInfo: /usr/share/zoneinfo
-
-          security:
-            authorization: disabled
-            javascriptEnabled: true
         owner: root
         group: root
         mode: 0644
       notify: restart mongod
 
-    - name: Start MongoDB service
+    - name: Start and enable MongoDB service
       service:
         name: mongod
         state: started
         enabled: yes
 
-    - name: Verify MongoDB version
-      command: mongod --version
-      register: mongo_version
+    - name: Wait for MongoDB to start
+      wait_for:
+        port: "{{ mongodb_port }}"
+        delay: 5
+        timeout: 30
+
+
+    - name: Initialize MongoDB admin user
+      community.mongodb.mongodb_user:
+        login_user: "{{ mongodb_admin_user }}"
+        login_password: "{{ mongodb_admin_password }}"
+        database: admin
+        replica_set: rs0
+        roles: root
+        state: present
+      when: false  
+
+    - name: Create application database
+      community.mongodb.mongodb_db:
+        name: "{{ mongodb_app_db }}"
+        state: present
+
+    - name: Create application database user
+      community.mongodb.mongodb_user:
+        login_user: "{{ mongodb_admin_user }}"
+        login_password: "{{ mongodb_admin_password }}"
+        database: "{{ mongodb_app_db }}"
+        name: "{{ mongodb_app_user }}"
+        password: "{{ mongodb_app_password }}"
+        roles: readWrite
+        state: present
+      when: false 
+
+ 
+    - name: Add NodeSource repository
+      shell: |
+        curl -fsSL https://rpm.nodesource.com/setup_{{ node_version }} | bash -
+      args:
+        creates: "/etc/yum.repos.d/nodesource-el9.repo"
+
+    - name: Install Node.js and npm
+      dnf:
+        name:
+          - nodejs
+        state: present
+
+    - name: Verify Node.js installation
+      command: node --version
+      register: node_version_check
       changed_when: false
 
-    - name: Display MongoDB version
+    - name: Debug Node.js version
       debug:
-        var: mongo_version.stdout_lines
+        var: node_version_check.stdout
+
+
+    - name: Create application user
+      user:
+        name: "{{ app_user }}"
+        system: yes
+        home: "{{ app_dir }}"
+        create_home: yes
+
+    - name: Create application directory
+      file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: 0755
+
+    - name: Set up npm global directory
+      file:
+        path: "{{ npm_global_dir }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: 0755
+
+    - name: Configure npm
+      shell: |
+        npm config set prefix "{{ npm_global_dir }}"
+        echo "export PATH=\"{{ npm_global_dir }}/bin:$PATH\"" >> ~/.bashrc
+      become_user: "{{ app_user }}"
+      environment:
+        HOME: "{{ app_dir }}"
+
+    - name: Clone application repository
+      git:
+        repo: "{{ app_repo }}"
+        dest: "{{ app_dir }}"
+        version: "{{ app_branch }}"
+        force: yes
+      become_user: "{{ app_user }}"
+
+    - name: Install application dependencies
+      npm:
+        path: "{{ app_dir }}"
+        state: present
+        production: yes
+      become_user: "{{ app_user }}"
+      environment:
+        PATH: "{{ npm_global_dir }}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        HOME: "{{ app_dir }}"
+        NODE_ENV: production
+        npm_config_prefix: "{{ npm_global_dir }}"
+
+
+    - name: Create environment file
+      template:
+        src: templates/app.env.j2
+        dest: "{{ app_dir }}/.env"
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: 0640
+
+
+    - name: Create systemd service
+      template:
+        src: templates/nodeapp.service.j2
+        dest: /etc/systemd/system/nodeapp.service
+        owner: root
+        group: root
+        mode: 0644
+      notify:
+        - reload systemd
+        - restart nodeapp
+
+    - name: Enable and start application service
+      service:
+        name: nodeapp
+        state: started
+        enabled: yes
+
+
+    - name: Verify application is running
+      uri:
+        url: "http://localhost:{{ app_port }}"
+        return_content: yes
+      register: app_status
+      until: app_status.status == 200
+      retries: 5
+      delay: 10
+      ignore_errors: yes
+
+    - name: Debug application status
+      debug:
+        var: app_status.status
 
   handlers:
     - name: restart mongod
       service:
         name: mongod
+        state: restarted
+
+    - name: reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: restart nodeapp
+      service:
+        name: nodeapp
         state: restarted
 ...
