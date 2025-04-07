@@ -16,6 +16,7 @@
     app_port: 3000
 
   tasks:
+    # Install prerequisites
     - name: Install Python and pip
       dnf:
         name:
@@ -28,6 +29,7 @@
         name: pymongo
         executable: pip3
 
+    # MongoDB Installation
     - name: Add MongoDB 8.0 repo
       yum_repository:
         name: mongodb-org-{{ mongodb_version }}
@@ -45,14 +47,32 @@
           - mongodb-database-tools
         state: present
 
-    - name: Start MongoDB without auth
+    - name: Ensure MongoDB data directory exists
+      file:
+        path: /var/lib/mongo
+        state: directory
+        owner: mongod
+        group: mongod
+        mode: '0755'
+
+    - name: Start MongoDB service
       service:
         name: mongod
         state: started
         enabled: yes
 
+    - name: Wait for MongoDB to accept connections
+      wait_for:
+        port: 27017
+        delay: 5
+        timeout: 60
+      register: mongo_ready
+      until: mongo_ready is succeeded
+      retries: 3
+      delay: 10
 
-    - name: Create admin user (no auth)
+    # Create initial admin user without auth
+    - name: Create admin user
       community.mongodb.mongodb_user:
         login_host: localhost
         login_port: 27017
@@ -62,7 +82,7 @@
         roles: "userAdminAnyDatabase,readWriteAnyDatabase"
         state: present
 
-
+    # Now enable auth and restart
     - name: Enable MongoDB authentication
       blockinfile:
         path: /etc/mongod.conf
@@ -76,13 +96,13 @@
         name: mongod
         state: restarted
 
-    - name: Verify MongoDB is ready
+    - name: Wait for MongoDB to restart
       wait_for:
         port: 27017
         delay: 5
         timeout: 60
 
-
+    # Create application user with auth
     - name: Create app database user
       community.mongodb.mongodb_user:
         login_host: localhost
@@ -96,6 +116,7 @@
         roles: "readWrite"
         state: present
 
+    # Node.js Installation
     - name: Install Node.js {{ nodejs_version }}
       shell: |
         curl -fsSL https://rpm.nodesource.com/setup_{{ nodejs_version }} | bash -
@@ -103,6 +124,7 @@
       args:
         warn: false
 
+    # Application Deployment
     - name: Create app user
       user:
         name: "{{ app_user }}"
