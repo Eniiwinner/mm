@@ -62,25 +62,29 @@
       copy:
         dest: /etc/mongod.conf
         content: |
-        systemLog:
+          systemLog:
             destination: file
             path: {{ mongodb_log_dir }}/mongod.log
             logAppend: true
             logRotate: reopen
-        storage:
+
+          storage:
             dbPath: {{ mongodb_data_dir }}
             engine: wiredTiger
             journal:
               enabled: true
-        net:
+
+          net:
             bindIp: {{ mongodb_bind_ip }}
             port: {{ mongodb_port }}
             ipv6: false
-        processManagement:
+
+          processManagement:
             fork: true
             pidFilePath: /var/run/mongodb/mongod.pid
             timeZoneInfo: /usr/share/zoneinfo
-        security:
+
+          security:
             authorization: disabled
             javascriptEnabled: true
         owner: root
