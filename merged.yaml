@@ -18,7 +18,6 @@
     - name: Install required packages
       dnf:
         name:
-          - firewalld
           - gcc-c++
           - make
           - git
@@ -177,23 +176,6 @@
         name: nodeapp
         state: started
         enabled: yes
-
-    - name: Configure firewall
-      block:
-        - name: Ensure firewalld is running
-          service:
-            name: firewalld
-            state: started
-            enabled: yes
-
-        - name: Open port 3000
-          command: firewall-cmd --permanent --add-port=3000/tcp
-          register: firewall_result
-          changed_when: "'success' in firewall_result.stdout"
-
-        - name: Reload firewall
-          command: firewall-cmd --reload
-          when: firewall_result is changed
 
     - name: Verify MongoDB version
       command: mongod --version
