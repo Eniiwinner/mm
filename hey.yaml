@@ -1,5 +1,5 @@
 ---
-- name: Deploy and Expose Node.js App on Port 3000
+- name: Deploy Node.js Express with MongoDB App
   hosts: n1
   become: true
   vars:
@@ -10,14 +10,21 @@
     node_version: "18.x"
 
   tasks:
-    - name: Install Node.js prerequisites
+    - name: Install MongoDB and dependencies
       dnf:
         name:
+          - mongodb-org
           - gcc-c++
           - make
           - git
           - firewalld
         state: present
+
+    - name: Start MongoDB service
+      service:
+        name: mongod
+        state: started
+        enabled: yes
 
     - name: Add NodeSource repository
       shell: |
@@ -25,10 +32,9 @@
       args:
         creates: "/etc/yum.repos.d/nodesource-el9.repo"
 
-    - name: Install Node.js and npm
+    - name: Install Node.js
       dnf:
-        name:
-          - nodejs
+        name: nodejs
         state: present
 
     - name: Create application user
@@ -46,14 +52,6 @@
         group: "{{ app_user }}"
         mode: 0755
 
-    - name: Setup npm environment
-      shell: |
-        mkdir -p {{ app_dir }}/.npm
-        npm config set prefix "{{ app_dir }}/.npm"
-      become_user: "{{ app_user }}"
-      environment:
-        HOME: "{{ app_dir }}"
-
     - name: Clone application repository
       git:
         repo: "{{ app_repo }}"
@@ -67,9 +65,6 @@
         path: "{{ app_dir }}"
         state: present
       become_user: "{{ app_user }}"
-      environment:
-        npm_config_cache: "{{ app_dir }}/.npm"
-        npm_config_prefix: "{{ app_dir }}/.npm"
 
     - name: Create systemd service
       copy:
@@ -77,12 +72,12 @@
         content: |
           [Unit]
           Description=Node.js Express App
-          After=network.target
+          After=network.target mongod.service
 
           [Service]
           User={{ app_user }}
           WorkingDirectory={{ app_dir }}
-          Environment=PORT=3000
+          Environment=NODE_ENV=production
           ExecStart=/usr/bin/node {{ app_dir }}/index.js
           Restart=always
           RestartSec=10
@@ -102,28 +97,22 @@
         state: started
         enabled: yes
 
-    - name: Start and enable firewalld
-      service:
-        name: firewalld
-        state: started
-        enabled: yes
+    - name: Configure firewall
+      block:
+        - name: Ensure firewalld is running
+          service:
+            name: firewalld
+            state: started
+            enabled: yes
 
-    - name: Open port 3000 in firewall
-      command: |
-        firewall-cmd --permanent --add-port=3000/tcp
-        firewall-cmd --reload
-      register: firewall_result
-      changed_when: "'success' in firewall_result.stdout"
+        - name: Open port 3000
+          command: firewall-cmd --permanent --add-port=3000/tcp
+          register: firewall_result
+          changed_when: "'success' in firewall_result.stdout"
 
-    - name: Verify app is listening
-      wait_for:
-        host: "0.0.0.0"
-        port: 3000
-        timeout: 60
-      register: app_listening
-      until: app_listening is succeeded
-      retries: 3
-      delay: 10
+        - name: Reload firewall
+          command: firewall-cmd --reload
+          when: firewall_result is changed
 
   handlers:
     - name: reload systemd
