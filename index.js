@@ -12,4 +12,6 @@ app.get('/', async (req, res) => {
   res.send(`<h1>I’m building pipelines like a pro!</h1><ul>${names}</ul>`);
 });
 
-app.listen(3000, () => console.log('App running on port 3000'));
+app.listen(3000, '0.0.0.0', () => {
+    console.log('App running on all interfaces, port 3000');
+  });
