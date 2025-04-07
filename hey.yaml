@@ -1,0 +1,137 @@
+---
+- name: Deploy and Expose Node.js App on Port 3000
+  hosts: n1
+  become: true
+  vars:
+    app_user: "nodeapp"
+    app_dir: "/opt/nodeapp"
+    app_repo: "https://github.com/Eniiwinner/mm.git"
+    app_branch: "main"
+    node_version: "18.x"
+
+  tasks:
+    - name: Install Node.js prerequisites
+      dnf:
+        name:
+          - gcc-c++
+          - make
+          - git
+          - firewalld
+        state: present
+
+    - name: Add NodeSource repository
+      shell: |
+        curl -fsSL https://rpm.nodesource.com/setup_{{ node_version }} | bash -
+      args:
+        creates: "/etc/yum.repos.d/nodesource-el9.repo"
+
+    - name: Install Node.js and npm
+      dnf:
+        name:
+          - nodejs
+        state: present
+
+    - name: Create application user
+      user:
+        name: "{{ app_user }}"
+        system: yes
+        home: "{{ app_dir }}"
+        create_home: yes
+
+    - name: Create application directory
+      file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: 0755
+
+    - name: Setup npm environment
+      shell: |
+        mkdir -p {{ app_dir }}/.npm
+        npm config set prefix "{{ app_dir }}/.npm"
+      become_user: "{{ app_user }}"
+      environment:
+        HOME: "{{ app_dir }}"
+
+    - name: Clone application repository
+      git:
+        repo: "{{ app_repo }}"
+        dest: "{{ app_dir }}"
+        version: "{{ app_branch }}"
+        force: yes
+      become_user: "{{ app_user }}"
+
+    - name: Install dependencies
+      npm:
+        path: "{{ app_dir }}"
+        state: present
+      become_user: "{{ app_user }}"
+      environment:
+        npm_config_cache: "{{ app_dir }}/.npm"
+        npm_config_prefix: "{{ app_dir }}/.npm"
+
+    - name: Create systemd service
+      copy:
+        dest: "/etc/systemd/system/nodeapp.service"
+        content: |
+          [Unit]
+          Description=Node.js Express App
+          After=network.target
+
+          [Service]
+          User={{ app_user }}
+          WorkingDirectory={{ app_dir }}
+          Environment=PORT=3000
+          ExecStart=/usr/bin/node {{ app_dir }}/index.js
+          Restart=always
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+        owner: root
+        group: root
+        mode: 0644
+      notify:
+        - reload systemd
+        - restart nodeapp
+
+    - name: Enable and start service
+      service:
+        name: nodeapp
+        state: started
+        enabled: yes
+
+    - name: Start and enable firewalld
+      service:
+        name: firewalld
+        state: started
+        enabled: yes
+
+    - name: Open port 3000 in firewall
+      command: |
+        firewall-cmd --permanent --add-port=3000/tcp
+        firewall-cmd --reload
+      register: firewall_result
+      changed_when: "'success' in firewall_result.stdout"
+
+    - name: Verify app is listening
+      wait_for:
+        host: "0.0.0.0"
+        port: 3000
+        timeout: 60
+      register: app_listening
+      until: app_listening is succeeded
+      retries: 3
+      delay: 10
+
+  handlers:
+    - name: reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: restart nodeapp
+      service:
+        name: nodeapp
+        state: restarted
+...
