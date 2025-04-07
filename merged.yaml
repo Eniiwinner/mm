@@ -1,0 +1,195 @@
+---
+- name: Deploy MongoDB 8.0 and Node.js Express App
+  hosts: n1
+  become: true
+  vars:
+    mongodb_bind_ip: "127.0.0.1"
+    mongodb_port: 27017
+    mongodb_data_dir: "/var/lib/mongo"
+    mongodb_log_dir: "/var/log/mongodb"
+    
+    app_user: "nodeapp"
+    app_dir: "/opt/nodeapp"
+    app_repo: "https://github.com/Eniiwinner/mm.git"
+    app_branch: "main"
+    node_version: "18.x"
+    mongodb_conn_str: "mongodb://localhost/devops"
+
+  tasks:
+    - name: Add MongoDB 8.0 GPG key
+      rpm_key:
+        state: present
+        key: "https://www.mongodb.org/static/pgp/server-8.0.asc"
+
+    - name: Configure MongoDB 8.0 repository
+      yum_repository:
+        name: mongodb-org-8.0
+        description: MongoDB 8.0 Repository
+        baseurl: https://repo.mongodb.org/yum/redhat/9/mongodb-org/8.0/x86_64/
+        gpgcheck: yes
+        gpgkey: https://www.mongodb.org/static/pgp/server-8.0.asc
+        enabled: yes
+
+    - name: Install MongoDB packages
+      dnf:
+        name:
+          - mongodb-org
+          - mongodb-org-server
+          - mongodb-org-mongos
+          - mongodb-mongosh
+          - mongodb-database-tools
+        state: present
+
+    - name: Create MongoDB directories
+      file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: mongod
+        group: mongod
+        mode: 0755
+      loop:
+        - { path: "{{ mongodb_data_dir }}" }
+        - { path: "{{ mongodb_log_dir }}" }
+
+    - name: Configure MongoDB
+      copy:
+        dest: /etc/mongod.conf
+        content: |
+          systemLog:
+            destination: file
+            path: {{ mongodb_log_dir }}/mongod.log
+            logAppend: true
+            logRotate: reopen
+          storage:
+            dbPath: {{ mongodb_data_dir }}
+            engine: wiredTiger
+            journal:
+              enabled: true
+          net:
+            bindIp: {{ mongodb_bind_ip }}
+            port: {{ mongodb_port }}
+            ipv6: false
+          processManagement:
+            fork: true
+            pidFilePath: /var/run/mongodb/mongod.pid
+            timeZoneInfo: /usr/share/zoneinfo
+          security:
+            authorization: disabled
+            javascriptEnabled: true
+        owner: root
+        group: root
+        mode: 0644
+      notify: restart mongod
+
+    - name: Start MongoDB service
+      service:
+        name: mongod
+        state: started
+        enabled: yes
+
+    - name: Install Node.js prerequisites
+      dnf:
+        name:
+          - gcc-c++
+          - make
+          - git
+        state: present
+
+    - name: Add NodeSource repository
+      shell: |
+        curl -fsSL https://rpm.nodesource.com/setup_{{ node_version }} | bash -
+      args:
+        creates: "/etc/yum.repos.d/nodesource-el9.repo"
+
+    - name: Install Node.js and npm
+      dnf:
+        name:
+          - nodejs
+        state: present
+
+    - name: Create application user
+      user:
+        name: "{{ app_user }}"
+        system: yes
+        home: "{{ app_dir }}"
+        create_home: yes
+
+    - name: Create application directory
+      file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: 0755
+
+    - name: Setup npm environment
+      shell: |
+        mkdir -p {{ app_dir }}/.npm
+        npm config set prefix "{{ app_dir }}/.npm"
+      become_user: "{{ app_user }}"
+      environment:
+        HOME: "{{ app_dir }}"
+
+    - name: Clone application repository
+      git:
+        repo: "{{ app_repo }}"
+        dest: "{{ app_dir }}"
+        version: "{{ app_branch }}"
+        force: yes
+      become_user: "{{ app_user }}"
+
+    - name: Install dependencies
+      npm:
+        path: "{{ app_dir }}"
+        state: present
+      become_user: "{{ app_user }}"
+      environment:
+        npm_config_cache: "{{ app_dir }}/.npm"
+        npm_config_prefix: "{{ app_dir }}/.npm"
+
+    - name: Create systemd service
+      template:
+        src: nodeapp.service.j2
+        dest: "/etc/systemd/system/nodeapp.service"
+        owner: root
+        group: root
+        mode: 0644
+      vars:
+        mongodb_conn_str: "{{ mongodb_conn_str }}"
+      notify:
+        - reload systemd
+        - restart nodeapp
+
+    - name: Enable and start service
+      service:
+        name: nodeapp
+        state: started
+        enabled: yes
+
+    - name: Open port 3000
+      firewalld:
+        port: 3000/tcp
+        permanent: yes
+        state: enabled
+      notify: reload firewalld
+
+  handlers:
+    - name: restart mongod
+      service:
+        name: mongod
+        state: restarted
+
+    - name: reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: restart nodeapp
+      service:
+        name: nodeapp
+        state: restarted
+
+    - name: reload firewalld
+      service:
+        name: firewalld
+        state: reloaded
+...
