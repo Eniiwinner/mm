@@ -5,7 +5,7 @@
   vars:
     app_user: "nodeapp"
     app_dir: "/opt/nodeapp"
-    app_repo: "https://github.com/Eniiwinner/mm.git"
+    app_repo: "https://github.com/yourusername/your-repo.git"
     app_branch: "main"
     node_version: "18.x"
 
@@ -30,11 +30,12 @@
           - nodejs
         state: present
 
-    - name: Create application user
+    - name: Create application user with home directory
       user:
         name: "{{ app_user }}"
         system: yes
-        create_home: no
+        home: "/home/{{ app_user }}"
+        create_home: yes
 
     - name: Create application directory
       file:
@@ -43,6 +44,14 @@
         owner: "{{ app_user }}"
         group: "{{ app_user }}"
         mode: 0755
+
+    - name: Set npm config to use app directory
+      shell: |
+        mkdir -p {{ app_dir }}/.npm
+        npm config set prefix "{{ app_dir }}/.npm"
+      become_user: "{{ app_user }}"
+      environment:
+        HOME: "{{ app_dir }}"
 
     - name: Clone application repository
       git:
@@ -57,6 +66,9 @@
         path: "{{ app_dir }}"
         state: present
       become_user: "{{ app_user }}"
+      environment:
+        npm_config_cache: "{{ app_dir }}/.npm"
+        npm_config_prefix: "{{ app_dir }}/.npm"
 
     - name: Configure systemd service
       template:
