@@ -94,16 +94,27 @@
         state: started
         enabled: yes
 
-    - name: Add NodeSource repository
+    - name: Add NodeSource repository (includes npm)
       shell: |
         curl -fsSL https://rpm.nodesource.com/setup_{{ node_version }} | bash -
       args:
         creates: "/etc/yum.repos.d/nodesource-el9.repo"
 
-    - name: Install Node.js
+    - name: Install Node.js and npm
       dnf:
-        name: nodejs
+        name:
+          - nodejs
         state: present
+
+    - name: Verify npm installation
+      command: npm --version
+      register: npm_version
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Debug npm version
+      debug:
+        var: npm_version.stdout
 
     - name: Create application user
       user:
@@ -136,7 +147,7 @@
         force: yes
       become_user: "{{ app_user }}"
 
-    - name: Install dependencies
+    - name: Install dependencies with npm
       npm:
         path: "{{ app_dir }}"
         state: present
@@ -144,6 +155,7 @@
       environment:
         npm_config_cache: "{{ app_dir }}/.npm"
         npm_config_prefix: "{{ app_dir }}/.npm"
+        NODE_ENV: production
 
     - name: Create systemd service
       copy:
@@ -158,6 +170,7 @@
           WorkingDirectory={{ app_dir }}
           Environment=MONGODB_URI={{ mongodb_conn_str }}
           Environment=PORT=3000
+          Environment=NODE_ENV=production
           ExecStart=/usr/bin/node {{ app_dir }}/index.js
           Restart=always
           RestartSec=10
@@ -176,6 +189,16 @@
         name: nodeapp
         state: started
         enabled: yes
+
+    - name: Verify app is running
+      shell: |
+        curl -s http://localhost:3000 || echo "App not responding"
+      register: app_status
+      changed_when: false
+
+    - name: Debug app status
+      debug:
+        var: app_status.stdout
 
     - name: Verify MongoDB version
       command: mongod --version
