@@ -5,7 +5,7 @@
   vars:
     app_user: "nodeapp"
     app_dir: "/opt/nodeapp"
-    app_repo: "https://github.com/yourusername/your-repo.git"
+    app_repo: "https://github.com/Eniiwinner/mm.git"
     app_branch: "main"
     node_version: "18.x"
 
